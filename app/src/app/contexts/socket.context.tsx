@@ -2,13 +2,21 @@ import { Dispatch, PropsWithChildren, createContext, useCallback, useContext, us
 import { Socket, io } from "socket.io-client";
 import { useUserName } from "./user.context";
 
+export interface LobbyState {
+    name: string;
+    owner: string;
+    partner: string;
+    spectators: string[];
+}
+
 // Socket State
 interface SocketState {
     connected: boolean;
+    lobbyList: Map<string, LobbyState>;
     socket: Socket|null;
-}
+};
 
-const initialSocketState: SocketState = { connected: false, socket: null };
+const initialSocketState: SocketState = { connected: false, socket: null, lobbyList: new Map() };
 const SocketStateContext = createContext<SocketState>(initialSocketState);
 export function useSocketState(): SocketState {
     return useContext(SocketStateContext);
@@ -21,17 +29,23 @@ export function useIsSocketConnected(useSocketObject: boolean = true): boolean {
 
 export function useSocketEmit() {
     const { socket } = useSocketState();
-    return useCallback((event: string, ...args: any[]) => socket?.emit(event, args), [socket]);
+    return useCallback(async (event: string, ...args: any[]) => socket?.emitWithAck(event, args), [socket]);
+}
+
+export function useLobbyList() {
+    const { lobbyList } = useSocketState();
+    return lobbyList;
 }
 
 // Socket Dispatch
 interface SocketAction {
     type: string;
-    lobby?: string;
+    lobbyList?: SocketState['lobbyList'];
+    updatedLobby?: [string, LobbyState];
     userName?: string;
 };
 function socketStateReducer(socketState: SocketState, action: SocketAction): SocketState {
-    const { type, lobby = '', userName = '' } = action;
+    const { type, lobbyList = [], userName = '', updatedLobby } = action;
     const { socket } = socketState;
 
     switch (type) {
@@ -60,6 +74,22 @@ function socketStateReducer(socketState: SocketState, action: SocketAction): Soc
         case 'disconnected': {
             return { ...socketState, connected: false } as SocketState;
         }
+        case 'set-lobby-list': {
+            const newLobbyList = new Map(lobbyList);
+            return { ...socketState, lobbyList: newLobbyList } as SocketState;
+        }
+        case 'update-lobby-list': {
+            const newLobbyList = new Map(socketState.lobbyList);
+            if (updatedLobby) {
+                if (updatedLobby[1] !== null) {
+                    newLobbyList.set(updatedLobby[0], updatedLobby[1]);
+                } else {
+                    newLobbyList.delete(updatedLobby[0]);
+                }
+                
+            }
+            return { ...socketState, lobbyList: newLobbyList } as SocketState;
+        }
         default: {
             throw Error('Unknown SocketState action: ' + action.type);
         }
@@ -82,17 +112,41 @@ export function useSocketDisconnect(): Dispatch<SocketAction> {
     return () => dispatch({ type: 'leave' });
 }
 
+export function useCreateLobby(): Dispatch<SocketAction> {
+    const emit = useSocketEmit();
+    return useCallback(() => {
+        emit('create-lobby', { name: 'Test Lobby' })
+            .then((response) => {
+                console.log(response);
+            });
+    }, [emit]);
+}
+
+export function useJoinLobby(): Dispatch<SocketAction> {
+    const emit = useSocketEmit();
+    return useCallback(() => {
+        emit('join-lobby', { lobby: 'testlobby' });
+    }, [emit]);
+}
+
 // Provider
 function SocketStateManager() {
     const { socket } = useSocketState();
     const dispatch = useSocketDispatch();
     if (socket) {
+        socket.removeAllListeners();
         socket.on('connect', () => {
             dispatch({ 'type': 'connected' });
         });
         socket.on('disconnect', () => {
             dispatch({ 'type': 'disconnected' });
         });
+        socket.on('update-lobby-list', ([updatedLobby, ...rest]) => {
+            dispatch({ type: 'update-lobby-list', updatedLobby });
+        });
+        socket.on('get-lobby-list', (lobbyList) => {
+            dispatch({ type: 'set-lobby-list', lobbyList });
+        })
     }
 
     return <></>;

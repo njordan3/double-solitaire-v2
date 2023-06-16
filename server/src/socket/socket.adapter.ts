@@ -2,6 +2,7 @@ import { IoAdapter } from '@nestjs/platform-socket.io';
 import { Server, Socket, ServerOptions } from 'socket.io';
 import { INestApplicationContext, WebSocketAdapter } from '@nestjs/common';
 import { SocketStateService } from './socket-state.service';
+import { LobbyStateService } from 'src/lobby/lobby-state.service';
 
 export interface AuthSocket extends Socket {
     user: {
@@ -15,6 +16,7 @@ export class SocketStateAdapter extends IoAdapter implements WebSocketAdapter {
     public constructor(
         private readonly app: INestApplicationContext,
         private readonly socketStateService: SocketStateService,
+        private readonly lobbyStateService: LobbyStateService,
     ) {
         super(app);
     }
@@ -32,9 +34,7 @@ export class SocketStateAdapter extends IoAdapter implements WebSocketAdapter {
             }
 
             try {
-                socket.user = {
-                    userName,
-                };
+                socket.user = { userName };
 
                 return next();
             } catch (e) {
@@ -48,11 +48,14 @@ export class SocketStateAdapter extends IoAdapter implements WebSocketAdapter {
     public bindClientConnect(server: Server, callback: (socket: AuthSocket) => void): void {
         server.on('connection', (socket: AuthSocket) => {
             if (socket.user) {
-                this.socketStateService.add(socket.user.userName, socket);
+                this.socketStateService.connect(socket);
 
-                socket.on('disconnect', () => {
-                    this.socketStateService.remove(socket.user.userName, socket);
+                // 'disconnect' event doesn't have rooms available
+                socket.on('disconnecting', () => {
+                    this.socketStateService.disconnect(socket);
                 });
+
+                socket.emit('get-lobby-list', this.socketStateService.getAllLobbies(true)); // Load lobbies when they connect
             }
 
             callback(socket);
